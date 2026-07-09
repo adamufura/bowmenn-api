@@ -2,6 +2,7 @@ package com.bowmenn.bowmenn_api.modules.shipment;
 
 import com.bowmenn.bowmenn_api.common.exception.BadRequestException;
 import com.bowmenn.bowmenn_api.common.exception.ResourceNotFoundException;
+import com.bowmenn.bowmenn_api.common.exception.UnauthorizedException;
 import com.bowmenn.bowmenn_api.common.util.PricingUtil;
 import com.bowmenn.bowmenn_api.modules.shipment.dto.CreateShipmentRequest;
 import com.bowmenn.bowmenn_api.modules.shipment.dto.ShipmentResponse;
@@ -83,17 +84,51 @@ public class ShipmentService {
     }
 
     @Transactional(readOnly = true)
-    public ShipmentResponse getShipmentById(UUID id) {
+    public ShipmentResponse getShipmentById(UUID id, String requesterEmail) {
         Shipment shipment = shipmentRepository.findById(id)
             .orElseThrow(() -> new ResourceNotFoundException("Shipment not found"));
+        assertCanView(shipment, requireUser(requesterEmail));
         return ShipmentResponse.from(shipment);
     }
 
     @Transactional(readOnly = true)
-    public ShipmentResponse getShipmentByTracking(String trackingNumber) {
+    public ShipmentResponse getShipmentByTracking(String trackingNumber, String requesterEmail) {
         Shipment shipment = shipmentRepository.findByTrackingNumber(trackingNumber)
             .orElseThrow(() -> new ResourceNotFoundException("Shipment not found"));
+        assertCanView(shipment, requireUser(requesterEmail));
         return ShipmentResponse.from(shipment);
+    }
+
+    private User requireUser(String email) {
+        return userRepository.findByEmail(email)
+            .orElseThrow(() -> new ResourceNotFoundException("User not found"));
+    }
+
+    /**
+     * A shipment is visible to an admin, to the customer who booked it, and to the
+     * driver it is assigned to. Everyone else is denied.
+     */
+    public static void assertCanView(Shipment shipment, User user) {
+        if (user.getRole() == UserRole.ADMIN) return;
+        if (user.getRole() == UserRole.CUSTOMER
+                && shipment.getCustomer() != null
+                && shipment.getCustomer().getId().equals(user.getId())) return;
+        if (user.getRole() == UserRole.DRIVER
+                && shipment.getDriver() != null
+                && shipment.getDriver().getId().equals(user.getId())) return;
+        throw new UnauthorizedException("You do not have access to this shipment");
+    }
+
+    /**
+     * Only an admin, or the driver the shipment is assigned to, may move it through
+     * the delivery lifecycle.
+     */
+    public static void assertCanUpdate(Shipment shipment, User user) {
+        if (user.getRole() == UserRole.ADMIN) return;
+        if (user.getRole() == UserRole.DRIVER
+                && shipment.getDriver() != null
+                && shipment.getDriver().getId().equals(user.getId())) return;
+        throw new UnauthorizedException("You are not assigned to this shipment");
     }
 
     // Admin operations
@@ -128,8 +163,8 @@ public class ShipmentService {
             String userEmail) {
         Shipment shipment = shipmentRepository.findById(shipmentId)
             .orElseThrow(() -> new ResourceNotFoundException("Shipment not found"));
-        User user = userRepository.findByEmail(userEmail)
-            .orElseThrow(() -> new ResourceNotFoundException("User not found"));
+        User user = requireUser(userEmail);
+        assertCanUpdate(shipment, user);
 
         ShipmentStatus currentStatus = shipment.getStatus();
         ShipmentStatus newStatus = request.getStatus();

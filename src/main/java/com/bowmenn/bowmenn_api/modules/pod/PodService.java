@@ -7,6 +7,7 @@ import com.bowmenn.bowmenn_api.common.storage.StoredFile;
 import com.bowmenn.bowmenn_api.modules.pod.dto.PodResponse;
 import com.bowmenn.bowmenn_api.modules.shipment.Shipment;
 import com.bowmenn.bowmenn_api.modules.shipment.ShipmentRepository;
+import com.bowmenn.bowmenn_api.modules.shipment.ShipmentService;
 import com.bowmenn.bowmenn_api.modules.shipment.ShipmentStatus;
 import com.bowmenn.bowmenn_api.modules.user.User;
 import com.bowmenn.bowmenn_api.modules.user.UserRepository;
@@ -38,6 +39,9 @@ public class PodService {
         User uploader = userRepository.findByEmail(uploaderEmail)
             .orElseThrow(() -> new ResourceNotFoundException("User not found"));
 
+        // Only the assigned driver (or an admin) may certify a delivery.
+        ShipmentService.assertCanUpdate(shipment, uploader);
+
         if (podRepository.existsByShipmentId(shipmentId)) {
             throw new BadRequestException("Proof of delivery already exists for this shipment");
         }
@@ -65,9 +69,14 @@ public class PodService {
     }
 
     @Transactional(readOnly = true)
-    public PodResponse getPodByShipmentId(UUID shipmentId) {
+    public PodResponse getPodByShipmentId(UUID shipmentId, String requesterEmail) {
         ProofOfDelivery pod = podRepository.findByShipmentId(shipmentId)
             .orElseThrow(() -> new ResourceNotFoundException("Proof of delivery not found"));
+        User requester = userRepository.findByEmail(requesterEmail)
+            .orElseThrow(() -> new ResourceNotFoundException("User not found"));
+
+        // Visible to the shipment's customer, its assigned driver, and admins.
+        ShipmentService.assertCanView(pod.getShipment(), requester);
         return PodResponse.from(pod);
     }
 }

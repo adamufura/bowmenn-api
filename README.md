@@ -19,7 +19,7 @@ API secured with JWT.
 | Database | PostgreSQL |
 | Migrations | Flyway (`V1`–`V6`) |
 | Auth | Stateless JWT (jjwt 0.11.5) |
-| File storage | ImageKit (server-side upload) |
+| File storage | Pluggable: local disk (default) or ImageKit |
 | API docs | springdoc-openapi 2.8.9 (Swagger UI) |
 | Build | Maven (wrapper included) |
 
@@ -55,14 +55,15 @@ controllers, services, repositories, DTOs, and entities.
 ```
 src/main/java/com/bowmenn/bowmenn_api
 ├── common/           cross-cutting: config, exception handling, response envelope,
-│                     security (JWT), storage (ImageKit), pricing util
+│                     security (JWT), storage (local/ImageKit), pricing util
 └── modules/
     ├── auth/         register / login / me
     ├── user/         user entity, roles, repository
     ├── shipment/     shipments, status lifecycle, truck types, status audit log
     ├── driver/       driver-facing shipment actions
     ├── admin/        dashboard, driver assignment, user management, stats
-    └── pod/          proof-of-delivery upload & retrieval
+    ├── pod/          proof-of-delivery upload & retrieval
+    └── pricing/      public price estimation
 
 src/main/resources
 ├── application.properties
@@ -101,19 +102,21 @@ for the full table). Key ones:
 | `SPRING_DATASOURCE_URL` | `jdbc:postgresql://localhost:5432/bowmenn` | |
 | `SPRING_DATASOURCE_USERNAME` / `_PASSWORD` | `postgres` / `postgres` | |
 | `JWT_SECRET` | dev default | **override in production** |
-| `IMAGEKIT_PRIVATE_KEY` | dev default | **override in production** |
+| `STORAGE_PROVIDER` | `local` | `local` or `imagekit` |
+| `IMAGEKIT_PRIVATE_KEY` | *(empty)* | only when `STORAGE_PROVIDER=imagekit` |
 | `PORT` | `8080` | |
 
-> ⚠️ The dev defaults for `JWT_SECRET` and `IMAGEKIT_PRIVATE_KEY` live in
-> `application.properties` for convenience. **Do not ship them** — set the env vars in
-> any real environment, and rotate the ImageKit key if it has been exposed.
+> ⚠️ `JWT_SECRET` has a development-only default in `application.properties`. **Override it
+> in any real environment.** No third-party credentials are committed: storage defaults to
+> local disk, and ImageKit keys are supplied via environment variables only.
+> See [`.env.example`](.env.example).
 
 ---
 
 ## Testing
 
 `scripts/smoke-test.sh` drives **every endpoint** end-to-end and asserts status codes and
-response fields (56 checks), including negative cases and RBAC enforcement. It uses unique
+response fields (64 checks), including negative cases and RBAC enforcement. It uses unique
 timestamped emails, so it is safely re-runnable.
 
 ```bash

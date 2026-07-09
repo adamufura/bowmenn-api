@@ -4,6 +4,7 @@ import com.bowmenn.bowmenn_api.common.exception.BadRequestException;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.core.io.ByteArrayResource;
 import org.springframework.http.*;
 import org.springframework.stereotype.Service;
@@ -20,9 +21,13 @@ import java.util.UUID;
 /**
  * {@link FileStorageService} backed by ImageKit's server-side upload API (V1),
  * authenticated with the account's private key via HTTP Basic auth.
+ *
+ * <p>Opt-in: enabled only when {@code storage.provider=imagekit}. Otherwise
+ * {@link LocalFileStorageService} is used.
  */
 @Service
 @Slf4j
+@ConditionalOnProperty(name = "storage.provider", havingValue = "imagekit")
 public class ImageKitStorageService implements FileStorageService {
 
     private final RestTemplate restTemplate;

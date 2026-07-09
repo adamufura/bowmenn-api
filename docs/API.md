@@ -38,7 +38,7 @@ com.bowmenn.bowmenn_api
 │   ├── exception/    GlobalExceptionHandler + typed exceptions
 │   ├── response/     ApiResponse<T> envelope
 │   ├── security/     JwtService, JwtAuthFilter, UserDetailsServiceImpl
-│   ├── storage/      FileStorageService + ImageKitStorageService
+│   ├── storage/      FileStorageService (Local + ImageKit implementations)
 │   └── util/         PricingUtil (haversine, pricing, tracking numbers)
 └── modules/
     ├── auth/         register / login / me
@@ -46,7 +46,8 @@ com.bowmenn.bowmenn_api
     ├── shipment/     Shipment, ShipmentStatus, TruckType, status logs, CRUD
     ├── driver/       driver-facing shipment actions
     ├── admin/        dashboard, assignment, user management, stats
-    └── pod/          proof-of-delivery upload & retrieval
+    ├── pod/          proof-of-delivery upload & retrieval
+    └── pricing/      public price estimation
 ```
 
 Persistence uses **Hibernate `ddl-auto=validate`** — the schema is owned entirely by
@@ -85,10 +86,11 @@ All settings are environment-overridable (defaults in parentheses).
 | `SPRING_DATASOURCE_PASSWORD` | `postgres` | DB password |
 | `JWT_SECRET` | (dev default, base64) | HMAC-SHA256 signing key — **override in production** |
 | `JWT_EXPIRATION` | `86400000` | Token TTL in ms (24 h) |
-| `IMAGEKIT_URL_ENDPOINT` | `https://ik.imagekit.io/kbvcwovny` | ImageKit URL endpoint |
-| `IMAGEKIT_PUBLIC_KEY` | (dev default) | ImageKit public key |
-| `IMAGEKIT_PRIVATE_KEY` | (dev default) | ImageKit private key — **override in production** |
-| `IMAGEKIT_UPLOAD_URL` | `https://upload.imagekit.io/api/v1/files/upload` | Upload endpoint (V1) |
+| `STORAGE_PROVIDER` | `local` | `local` (disk, no credentials) or `imagekit` |
+| `UPLOAD_DIR` | `uploads` | Local storage directory, served at `/uploads/**` |
+| `IMAGEKIT_URL_ENDPOINT` | *(empty)* | Required when `STORAGE_PROVIDER=imagekit` |
+| `IMAGEKIT_PUBLIC_KEY` | *(empty)* | Required when `STORAGE_PROVIDER=imagekit` |
+| `IMAGEKIT_PRIVATE_KEY` | *(empty)* | Required when `STORAGE_PROVIDER=imagekit` — never commit |
 | `IMAGEKIT_FOLDER` | `/bowmenn/pod` | Destination folder for POD images |
 | `PORT` | `8080` | HTTP port |
 
@@ -116,6 +118,19 @@ The token payload carries `sub` (email), `role`, and `userId`, and expires per
 | `/api/driver/**` | `DRIVER` |
 | `/api/admin/**` | `ADMIN` |
 | everything else | any authenticated user (e.g. `/api/pod/**`) |
+
+**Role gates are not enough.** URL prefixes decide *which kind of user* may call an
+endpoint; they cannot decide *which rows* that user may touch. Every shipment-scoped
+operation additionally enforces object-level authorization:
+
+| Operation | Permitted |
+|---|---|
+| View a shipment / its POD | the customer who booked it · its assigned driver · any admin |
+| Update a shipment's status | its assigned driver · any admin |
+| Upload proof of delivery | its assigned driver · any admin |
+
+Anything else returns **403**. Without this, any customer could read any other customer's
+shipment by guessing its id, and any driver could advance a job assigned to someone else.
 
 **Seeded admin** (created by migration `V5`):
 
@@ -157,6 +172,8 @@ Every JSON response uses a consistent envelope:
 | Bad login credentials | 401 | `Invalid email or password` |
 | Deactivated account login | 403 | `Account is deactivated` |
 | Insufficient role / no token | 403 | (Spring Security) |
+| Accessing another user's shipment/POD | 403 | `You do not have access to this shipment` |
+| Acting on a shipment you're not assigned to | 403 | `You are not assigned to this shipment` |
 | Unhandled server error | 500 | `An unexpected error occurred: …` |
 
 Validation error example:
@@ -186,8 +203,8 @@ timestamps.
 **ShipmentStatusLog** — append-only audit row written on every status change
 (`oldStatus`, `newStatus`, `changedBy`, `note`).
 
-**ProofOfDelivery** — one per shipment: `imageUrl` (public ImageKit URL), `imageFileId`
-(ImageKit file id, for later management/deletion), `note`, `uploadedBy`, `uploadedAt`.
+**ProofOfDelivery** — one per shipment: `imageUrl` (public URL), `imageFileId`
+(storage-provider id, for later management/deletion), `note`, `uploadedBy`, `uploadedAt`.
 
 **TruckType** — carries pricing/capacity:
 
@@ -345,8 +362,8 @@ Flip a user's `isActive`. Deactivated users cannot log in (403).
 
 #### `POST /api/pod/{shipmentId}`  `multipart/form-data`
 Upload a delivery photo. Fields: `file` (required), `note` (optional). The image is
-uploaded to **ImageKit** (server-side) and the returned public URL is stored on the POD
-record. Advances the shipment `IN_TRANSIT → DELIVERED`. `400` if a POD already exists.
+uploaded to the configured storage provider and the returned public URL is stored on the
+POD record. Advances the shipment `IN_TRANSIT → DELIVERED`. `400` if a POD already exists.
 
 ```bash
 curl -X POST http://localhost:8080/api/pod/<shipmentId> \
@@ -354,10 +371,10 @@ curl -X POST http://localhost:8080/api/pod/<shipmentId> \
   -F "file=@delivery.jpg" -F "note=Left with reception"
 ```
 ```json
-// 200 — imageUrl points at ImageKit
+// 200 — imageUrl points at the storage provider (local disk shown below)
 { "status": "success", "message": "POD uploaded",
   "data": { "id": "…", "shipmentId": "…",
-            "imageUrl": "https://ik.imagekit.io/kbvcwovny/bowmenn/pod/<uuid>_delivery.jpg",
+            "imageUrl": "/uploads/<uuid>_delivery.jpg",
             "imageFileId": "…", "note": "Left with reception",
             "uploadedBy": "…", "uploadedAt": "…" } }
 ```
@@ -371,7 +388,7 @@ Retrieve POD metadata (`imageUrl`, `imageFileId`, `note`, `uploadedBy`, `uploade
 ## Smoke test
 
 `scripts/smoke-test.sh` drives **every endpoint** end-to-end and asserts status codes and
-response fields (56 checks). It uses unique timestamped emails, so it is safely
+response fields (64 checks). It uses unique timestamped emails, so it is safely
 re-runnable against the same database.
 
 ```bash
@@ -388,7 +405,7 @@ Requires `bash`, `curl`, `python3`. Exits `0` when all checks pass, non-zero oth
 (with a list of failures). It covers: connectivity, the full auth flow (incl. negative
 cases), shipment creation + pricing, the complete driver lifecycle, admin
 assignment/cancellation/user-toggle, POD upload with auto-`DELIVERED`, duplicate-POD
-rejection, and RBAC (403/401) enforcement.
+rejection, RBAC (403/401) enforcement, and object-level authorization (IDOR regressions).
 
 ---
 
@@ -396,12 +413,13 @@ rejection, and RBAC (403/401) enforcement.
 
 - **Rotate `JWT_SECRET` in production.** The default key ships in the repo for local dev
   only.
-- **POD images are stored on ImageKit** (server-side upload, HTTP Basic auth with the
-  private key). The API stores and returns the resulting public `ik.imagekit.io` URL plus
-  the ImageKit `fileId`. Storage is abstracted behind `FileStorageService`
-  (`common/storage`), so swapping to S3/GCS is a matter of adding another implementation.
-  **Override `IMAGEKIT_PRIVATE_KEY` via env in production** — the dev default in
-  `application.properties` should not be shipped.
+- **POD image storage is pluggable** via `FileStorageService` (`common/storage`).
+  `STORAGE_PROVIDER=local` (default) writes to `UPLOAD_DIR` and serves the files at
+  `/uploads/**` — no credentials, works straight after a clone, but the disk is not shared
+  across instances. `STORAGE_PROVIDER=imagekit` uploads to ImageKit (server-side, HTTP Basic
+  auth) and returns absolute CDN URLs; use this in production. Adding S3/GCS is a new
+  implementation, not a refactor. **No credentials are committed** — supply `IMAGEKIT_*` via
+  environment variables.
 - **Changing an already-applied migration** (e.g. editing `V5`) will fail Flyway's
   checksum validation on existing databases. Add a new `V6+` migration instead, or reset
   the dev database.

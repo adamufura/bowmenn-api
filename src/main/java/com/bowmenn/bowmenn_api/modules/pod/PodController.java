@@ -32,8 +32,10 @@ public class PodController {
     }
 
     @GetMapping("/{shipmentId}")
-    public ResponseEntity<ApiResponse<PodResponse>> getPod(@PathVariable UUID shipmentId) {
+    public ResponseEntity<ApiResponse<PodResponse>> getPod(
+            @PathVariable UUID shipmentId,
+            @AuthenticationPrincipal UserDetails userDetails) {
         return ResponseEntity.ok(ApiResponse.success("POD retrieved",
-            podService.getPodByShipmentId(shipmentId)));
+            podService.getPodByShipmentId(shipmentId, userDetails.getUsername())));
     }
 }

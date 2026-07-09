@@ -38,15 +38,18 @@ public class ShipmentController {
     }
 
     @GetMapping("/{id}")
-    public ResponseEntity<ApiResponse<ShipmentResponse>> getShipment(@PathVariable UUID id) {
+    public ResponseEntity<ApiResponse<ShipmentResponse>> getShipment(
+            @PathVariable UUID id,
+            @AuthenticationPrincipal UserDetails userDetails) {
         return ResponseEntity.ok(ApiResponse.success("Shipment retrieved",
-            shipmentService.getShipmentById(id)));
+            shipmentService.getShipmentById(id, userDetails.getUsername())));
     }
 
     @GetMapping("/track/{trackingNumber}")
     public ResponseEntity<ApiResponse<ShipmentResponse>> trackShipment(
-            @PathVariable String trackingNumber) {
+            @PathVariable String trackingNumber,
+            @AuthenticationPrincipal UserDetails userDetails) {
         return ResponseEntity.ok(ApiResponse.success("Shipment retrieved",
-            shipmentService.getShipmentByTracking(trackingNumber)));
+            shipmentService.getShipmentByTracking(trackingNumber, userDetails.getUsername())));
     }
 }

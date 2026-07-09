@@ -229,10 +229,18 @@ upload "/api/pod/$S1" "$DRV_TOKEN" "$POD_FILE" "Delivered to reception"
 check_status "POST /api/pod/{shipmentId}" 200
 POD_URL="$(extract "['data']['imageUrl']")"
 case "$POD_URL" in
-  http*://ik.imagekit.io/*) pass "POD stored on ImageKit ($POD_URL)" ;;
-  http*)                    pass "POD imageUrl returned ($POD_URL)" ;;
-  *)                        fail "POD imageUrl missing/invalid ('$POD_URL')" ;;
+  http*://ik.imagekit.io/*) pass "POD stored on ImageKit ($POD_URL)"; POD_FETCH="$POD_URL" ;;
+  http*)                    pass "POD imageUrl returned ($POD_URL)";  POD_FETCH="$POD_URL" ;;
+  /uploads/*)               pass "POD stored locally ($POD_URL)";     POD_FETCH="$BASE_URL$POD_URL" ;;
+  *)                        fail "POD imageUrl missing/invalid ('$POD_URL')"; POD_FETCH="" ;;
 esac
+
+# The stored image must actually be retrievable over HTTP.
+if [ -n "$POD_FETCH" ]; then
+  code="$(curl -s -o /dev/null -w '%{http_code}' "$POD_FETCH")"
+  if [ "$code" = "200" ]; then pass "POD image is publicly served (HTTP 200)"
+  else fail "POD image not served — GET $POD_FETCH returned $code"; fi
+fi
 
 req GET "/api/shipments/$S1" "$ADMIN_TOKEN"
 check_field "S1 auto -> DELIVERED after POD" "['data']['status']" "DELIVERED"
@@ -253,6 +261,38 @@ if [ "$HTTP_CODE" = "403" ] || [ "$HTTP_CODE" = "401" ]; then pass "no-token -> 
 req GET /api/admin/shipments "$CUST_TOKEN"; check_status "customer -> admin = 403" 403
 req GET /api/driver/shipments "$CUST_TOKEN"; check_status "customer -> driver = 403" 403
 req POST /api/shipments "$DRV_TOKEN" "$SHIP_BODY"; check_status "driver -> create shipment = 403" 403
+
+# ---- Object-level authorization (IDOR regressions) --------------------------
+section "Object-level Authorization"
+# A second customer and the second driver must not be able to touch CUSTOMER's shipment S1.
+OTHER_EMAIL="other_${STAMP}@test.com"
+req POST /api/auth/register "" "{\"fullName\":\"Other Cust\",\"email\":\"$OTHER_EMAIL\",\"password\":\"$PW\",\"role\":\"CUSTOMER\"}"
+OTHER_TOKEN="$(extract "['data']['token']")"
+req POST /api/auth/login "" "{\"email\":\"$DRV2_EMAIL\",\"password\":\"$PW\"}"
+DRV2_TOKEN="$(extract "['data']['token']")"
+
+req GET "/api/shipments/$S1" "$OTHER_TOKEN"
+check_status "other customer cannot read another's shipment" 403
+
+req GET "/api/shipments/track/$S1_TRACK" "$OTHER_TOKEN"
+check_status "other customer cannot track another's shipment" 403
+
+req PUT "/api/driver/shipments/$S1/accept" "$DRV2_TOKEN"
+check_status "unassigned driver cannot act on a shipment" 403
+
+req GET "/api/pod/$S1" "$OTHER_TOKEN"
+check_status "other customer cannot read another's POD" 403
+
+POD_FILE2="$(mktemp /tmp/bwn_pod2_XXXX).png"
+printf 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==' | base64 -d > "$POD_FILE2"
+upload "/api/pod/$S2" "$OTHER_TOKEN" "$POD_FILE2" "should be denied"
+check_status "non-driver cannot upload POD (self-certify delivery)" 403
+
+req GET "/api/shipments/$S1" "$CUST_TOKEN"
+check_status "owner can still read their own shipment" 200
+req GET "/api/shipments/$S1" "$ADMIN_TOKEN"
+check_status "admin can still read any shipment" 200
+rm -f "$POD_FILE2"
 
 # =============================================================================
 section "Summary"
