@@ -31,3 +31,11 @@ build/
 
 ### VS Code ###
 .vscode/
+
+### Bowmenn ###
+# Local secrets / overrides — never commit
+bowmenn-local.properties
+.env
+# Locally stored proof-of-delivery uploads
+uploads/
+.DS_Store

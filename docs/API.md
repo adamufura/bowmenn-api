@@ -419,7 +419,9 @@ rejection, RBAC (403/401) enforcement, and object-level authorization (IDOR regr
   across instances. `STORAGE_PROVIDER=imagekit` uploads to ImageKit (server-side, HTTP Basic
   auth) and returns absolute CDN URLs; use this in production. Adding S3/GCS is a new
   implementation, not a refactor. **No credentials are committed** — supply `IMAGEKIT_*` via
-  environment variables.
+  environment variables, or drop the Spring property names into a gitignored
+  `bowmenn-local.properties` at the project root, which `spring.config.import` picks up
+  automatically and which overrides the defaults.
 - **Changing an already-applied migration** (e.g. editing `V5`) will fail Flyway's
   checksum validation on existing databases. Add a new `V6+` migration instead, or reset
   the dev database.
