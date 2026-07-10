@@ -10,6 +10,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.stereotype.Service;
 
+import java.nio.charset.StandardCharsets;
 import java.security.Key;
 import java.util.Date;
 import java.util.function.Function;
@@ -60,8 +61,29 @@ public class JwtService {
         return claimsResolver.apply(claims);
     }
 
+    /**
+     * Derives the HMAC signing key from {@code jwt.secret}. The secret may be provided
+     * either as a Base64-encoded value or as a plain (raw) string — a plain secret that
+     * happens to contain non-Base64 characters (e.g. '_' or '-') no longer breaks signing.
+     * The key must be at least 256 bits (32 bytes) for HS256.
+     */
     private Key getSigningKey() {
-        byte[] keyBytes = Decoders.BASE64.decode(secretKey);
+        byte[] keyBytes;
+        try {
+            keyBytes = Decoders.BASE64.decode(secretKey);
+            // A valid-looking Base64 string that decodes to too few bytes is almost
+            // certainly meant to be used raw — fall through to the UTF-8 branch.
+            if (keyBytes.length < 32) {
+                keyBytes = secretKey.getBytes(StandardCharsets.UTF_8);
+            }
+        } catch (RuntimeException notBase64) {
+            keyBytes = secretKey.getBytes(StandardCharsets.UTF_8);
+        }
+        if (keyBytes.length < 32) {
+            throw new IllegalStateException(
+                "jwt.secret must be at least 32 bytes (256 bits) for HS256; "
+                    + "got " + keyBytes.length + " bytes. Set a longer JWT_SECRET.");
+        }
         return Keys.hmacShaKeyFor(keyBytes);
     }
 }
